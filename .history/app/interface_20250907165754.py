@@ -1,0 +1,278 @@
+import streamlit as st
+import matplotlib.pyplot as plt
+import networkx as nx
+import pandas as pd
+
+from app.core import (
+    generar_datos,
+    resumen_datos,
+    plot_model,
+    discover_model,
+    modelo_proporcionado,
+    generar_CPD,
+    cpd_to_dataframe,
+    consultar_modelo,
+    consultar_y_formatear,
+    causalidad,
+    detectar_sombra_threshold,
+    detectar_sombra_adaptativo,
+    detectar_sombra_felzenszwalb,
+)
+
+# ===========================================================
+# Interfaz principal con menú
+# ===========================================================
+# --- HEADBAR FIJA ---
+st.markdown("""
+    <style>
+    .headbar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        background-color: #0d6efd;
+        padding: 12px 24px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        color: white;
+        font-size: 18px;
+        font-weight: bold;
+        z-index: 9999;
+    }
+    .headbar .title {
+        display: flex;
+        align-items: center;
+    }
+    .headbar img {
+        height: 30px;
+        margin-right: 10px;
+    }
+    .stApp {
+        margin-top: 70px; /* Para no tapar el contenido */
+    }
+    </style>
+
+    <div class="headbar">
+        <div class="title">
+            <img src="https://upload.wikimedia.org/wikipedia/commons/a/a7/React-icon.svg">
+            Causal Inference - Shadow Detection
+        </div>
+        <div class="menu">
+            Detección de Sombra Usando Inferencia Causal
+        </div>
+    </div>
+""", unsafe_allow_html=True)
+
+st.sidebar.title("Menú de operaciones")
+
+menu = st.sidebar.radio(
+    "Selecciona una opción",
+    [
+        "1. Generación del conjunto de datos observables",
+        "2. Generación del SCM",
+        "3. Inferencia causal",
+        "4. Causalidad",
+        "5. Visualizaciones",
+    ],
+)
+
+# ===========================================================
+# 1. Generación del conjunto de datos observables
+# ===========================================================
+if menu.startswith("1"):
+    st.header("Generación del conjunto de datos observables")
+    st.markdown("""
+                ### Descripción
+                Este conjunto de datos simula observaciones con las siguientes variables:
+                - **A**: Luz  
+                - **B**: Esfera  
+                - **C**: Superficie  
+                - **Y**: Sombra
+
+                De los **1,000,000 registros**, el **99%** cumple con todas las condiciones para generar sombra. 
+                El resto corresponde a casos especiales.
+                """)
+    df = generar_datos()
+
+    st.subheader("Resumen de los datos")
+    st.dataframe(resumen_datos(df))
+
+# ===========================================================
+# 2. Generación del SCM
+# ===========================================================
+elif menu.startswith("2"):
+    st.header("Modelo Estructural Causal (SCM)")
+    st.markdown("""
+                    Una red bayesiana es el equivalente a un SCM, dado que en este caso conocemos las variables y sus relaciones en la imagen. Sabemos que:
+                    1. A,B y C son independientes
+                    2. Y es dependiente de A, B y C
+
+                    Por lo cual, la probabilidad de Y está condicionada a los eventos A,B y C, es decir P(Y|A,B,C).
+                    Trataremos de llegar a este modelo, según nuestro "expert knowledge", utilizando el descubrimiento causal.
+                """)
+    df = generar_datos()
+
+    st.subheader("Causal discovery")
+    st.markdown("""
+                    Intentaremos inferir el SCM a partir de los datos; en otras palabras, el descubrimiento causal es la tarea de descubrir el modelo causal con base en la data. Para esta iferencia usaremos el algoritmo NOTEARS (Non-combinatorial Optimization via Trace Exponential and Augmented lagRangian for Structure learning)
+                """)
+    modelo_cd, fig_cd = discover_model(df)
+    st.pyplot(fig_cd)
+
+    st.subheader("Modelo ajustado - Acíclico y sin Factores de Confusión")
+    modelo, _, _ = modelo_proporcionado()
+    pos = {"A": [0, 1], "B": [-1, 0], "C": [1, 0], "Y": [0, -1]}
+    plot_model(modelo, pos=pos)
+
+
+# ===========================================================
+# 3. Inferencia causal
+# ===========================================================
+elif menu.startswith("3"):
+    st.header("Inferencia causal")
+    df = generar_datos()
+    modelo,_,_ = modelo_proporcionado()
+
+    st.subheader("Distribuciones de probabilidad condicional (CPDs)")
+    st.markdown("""
+                Las Distribuciones de Probabilidad Condicional (CPD) se usan para describir las probabilidades de la transición de los nodos en el diagrama.
+                Una CPD se define para un conjunto de variables aleatorias discretas y mutuamente dependientes para mostrar las probabilidades condicionales de una sola variable con respecto a las demás, es decir, la probabilidad de cada valor posible de una variable si conocemos los valores que toman las otras variables.
+                En nuestro caso lo que interesa es saber la probabilidad del outcome (Y) dados los valoes de los demás eventos (A, B y C) que intervienen en la imagen.
+                - **A**: Luz  
+                - **B**: Esfera  
+                - **C**: Superficie  
+                - **Y**: Sombra
+                """)
+    cpds = generar_CPD(modelo, df)
+
+    for cpd in cpds:
+        st.markdown(f"**CPD de {cpd.variable}**")
+        df_cpd = cpd_to_dataframe(cpd)
+        st.dataframe(df_cpd.style.format("{:.3f}"))
+
+    st.subheader("Consultas al modelo (What if...)")
+    st.markdown("""
+                    Queremos saber la probabilidad de que ocurra un evento (Y) dado que ocurren otros eventos (A, B y C).
+                    En otras palabras, queremos saber la probabilidad de que ocurra Y dado que A, B y C han ocurrido.
+                    Esto se puede calcular usando la CPD de Y.
+                    1. Cuántas sombras hay detectadas?
+                    2. Qué pasaría con la sombra si no hubiera habido esfera?
+                    3. Qué pasaría con la sombra si no hubiera habido luz?
+                """)
+    consulta_1 = consultar_y_formatear(modelo, df, variables=['Y'], evidencia=None, descripcion="Cantidad de sombras detectadas")
+    consulta_2 = consultar_y_formatear(modelo, df, variables=['Y'], evidencia={'B': 0}, descripcion="Número de sombras si no hubiera habido esfera")
+    consulta_3 = consultar_y_formatear(modelo, df, variables=['Y'], evidencia={'A': 0}, descripcion="Número de sombras si no hubiera habido luz")
+
+    # Mostrar resultados
+    #for consulta in [consulta_1, consulta_2, consulta_3]:
+    #    st.write(f"**{consulta['descripcion']}**: {consulta['cantidad']} ({consulta['porcentaje']}%)")
+    consultas = [consulta_1, consulta_2, consulta_3]
+    df_consultas = pd.DataFrame(consultas)
+    df_consultas.columns = ["Descripción", "Cantidad", "Proporción",]
+    st.subheader("📊 Resultados de las consultas")
+    st.dataframe(df_consultas)
+
+# ===========================================================
+# 4. Causalidad
+# ===========================================================
+elif menu.startswith("4"):
+    st.header("Causalidad")
+    st.markdown("""
+                El escenario más común para aplicar la causalidad corresponde a un grupo de individuos dividido en 2 subgrupos; el primer grupo será el grupo que recibirá un tratamiento y, el segundo grupo, será el grupo de control que no recibirá tratamiento. Así se podrá inferir el efecto causado por el tratamiento.
+                Esto implica que el ejemplo cambiará un poco de orientación:
+
+                El individuo será el escenario conformado por luz y superficie (estos siempre serán percibidos)
+                El tratamiento será la esfera
+                El efecto será la sombra
+                """)
+    df = generar_datos()
+    modelo,_,_ = modelo_proporcionado()
+    generar_CPD(modelo, df)
+
+    st.subheader("Average Treatment Effect (ATE)")
+    st.markdown("""
+                El Average Treatment Effect (ATE) es una medida de causalidad que se utiliza para inferir el efecto causal de un tratamiento en una población.
+                En nuestro caso, el tratamiento será la esfera y el efecto será la sombra.
+                Un ATE positivo indica que la hipótesis planteada cobra fuerza y, en este caso, es altamente probable que la causa de la sombra sea la presencia de la esfera, es decir, que al aplicar el tratamiento B, el efecto obtenido en Y será el esperado.
+                """)
+    resultado_ate = causalidad(df, modelo, tipo="ate")
+    # Convertimos ATE, ATT y ATC a DataFrame
+    df_ate = pd.DataFrame([
+        {"Métrica": "ATE", "Valor": resultado_ate["ATE"]},
+    ])
+
+    st.dataframe(df_ate)
+
+    # Mostrar también el resumen textual de causalinference
+    st.subheader("Estimaciones de Causalidad (OLS)")
+    st.code(resultado_ate["Resumen"], language="text")
+    st.markdown("""
+                Usualmente un p-value (P>|z|) tiene un umbral por defecto del 0.05, entonces, cualquier hipótesis, cuyo p-value esté por debajo de este umbral, se considerará no nula. En este caso, para un intervalo de confianza del 95% el p-value de nuestra hipótesis indica que ésta, por mucho, no es nula. Y así, queda inferida la causa de la sombra en la imagen.                
+                """)
+    st.subheader("Intervenciones (do-calculus)")
+    st.markdown("""
+                Ahora, para ver qué tan lejos está nuestra hipótesis de ser nula, es el momento de hacer intervenciones; en este caso intervenir el modelo consiste en desaparecer la esfera(B) y ver que pasa con la sombra(Y).
+                """)
+    resultado_do = causalidad(df, modelo, tipo="do")
+
+    # ⚡ Mostrar tablas para do(B=0) y do(B=1)
+    for nombre, df_do in resultado_do.items():
+        st.markdown(f"**{nombre}**")
+        st.dataframe(df_do.style.format("{:.3f}"))
+
+    st.markdown("""
+                Como se esperaba: es altamente probable que la ausencia de la esfera implique que no se perciba sombra en la escena. Ahora usemos el propensity score para determinar la estimación y el efecto del tratamiento. Recordemos que el outcome es la sombra (Y), el tratamiento es la esfera (B) y los factores de confusión son la luz y la superficie (confounders = {A,C}), para ello seguiremos 2 pasos.
+                """)
+
+
+# ===========================================================
+# 5. Visualizaciones
+# ===========================================================
+elif menu.startswith("5"):
+    st.header("Visualizaciones - Detección de sombras en imágenes")
+    st.write("Sube una imagen para probar los diferentes métodos de detección.")
+
+    uploaded_file = st.file_uploader("📂 Selecciona una imagen", type=["png", "jpg", "jpeg"])
+
+    if uploaded_file is not None:
+        path = f"./temp_{uploaded_file.name}"
+        with open(path, "wb") as f:
+            f.write(uploaded_file.read())
+
+        metodo = st.selectbox(
+            "Elige un método de detección",
+            ["Threshold fijo", "Umbral adaptativo", "Segmentación Felzenszwalb (Inferencia Causal)"],
+        )
+
+        porcentaje = None  # Inicializamos
+
+        if metodo == "Threshold fijo":
+            porcentaje = detectar_sombra_threshold(path)
+        elif metodo == "Umbral adaptativo":
+            porcentaje = detectar_sombra_adaptativo(path)
+        elif metodo == "Segmentación Felzenszwalb (Inferencia Causal)":
+            porcentaje = detectar_sombra_felzenszwalb(path)
+
+        # ✅ Mostrar el porcentaje debajo de la visualización
+        if porcentaje is not None:
+            st.success(f"🔍 **Porcentaje de área detectada como sombra: {porcentaje:.3f}%**")
+
+        st.markdown("### 📊 Interpretación de Resultados")
+        st.markdown("""
+                        Los porcentajes obtenidos representan la **proporción de la imagen que cada método identificó como sombra** (bien sea mediante contornos en rojo o segmentación directa).
+
+                        - **Umbralización Fija (55.91%)**: Detectó la mayor área como sombra. Esto puede deberse a que usa un umbral global rígido, lo que puede **sobreestimar** zonas oscuras, incluyendo posibles falsos positivos.
+                        
+                        - **Umbral Adaptativo (51.65%)**: Ofrece un balance más fino al ajustar el umbral localmente. Es más robusto a variaciones de iluminación y probablemente más preciso en escenas complejas.
+
+                        - **Segmentación Felzenszwalb (51.50%)**: Basado en regiones y textura, este método es el más semántico — agrupa píxeles similares y luego clasifica regiones enteras. Su resultado es muy cercano al umbral adaptativo, lo que sugiere **coherencia en la detección de sombras reales**, evitando ruido.
+
+                        ---
+
+                        ### Conclusión
+
+                        > **El método de Umbralización Fija detecta más área, pero no necesariamente mejor.**  
+                        > Los métodos **Umbral Adaptativo y Felzenszwalb** son más conservadores y probablemente más precisos, al enfocarse en patrones locales o regiones homogéneas.  
+                        > Si el objetivo es **detectar sombras de forma robusta y evitar falsos positivos**, se recomienda **Felzenszwalb** por su enfoque basado en regiones y coherencia visual.
+        """)

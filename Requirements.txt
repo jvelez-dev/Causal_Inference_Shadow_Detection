@@ -1,0 +1,20 @@
+# Librerías base
+numpy
+pandas
+matplotlib
+networkx
+
+# Streamlit para la interfaz
+streamlit
+
+# Modelado probabilístico y causal
+pgmpy
+causalinference
+
+# Procesamiento y visión por computador
+opencv-python
+scikit-image
+
+# Utilidades extra
+scipy
+Pillow
